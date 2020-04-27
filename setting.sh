@@ -11,6 +11,7 @@ LUCENEUTIL_BUILD="${LUCENEUTIL}/build"
 INDEX_DATA="${HOME}/data/enwiki-20120502-lines-1k.txt"
 INDEX_DIR="${HOME}/data/indices"
 
+# SERVER_IP="server:192.168.0.106:7777"
 SERVER_IP="server:127.0.0.1:7777"
 LOG_FILE="${HOME}/data/logs"
 

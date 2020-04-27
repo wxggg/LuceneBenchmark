@@ -10,7 +10,7 @@ JARPATH+=target/dependency/lucene-highlighter-8.3.0.jar
 
 # chrt -10
 nice -n -10 java -server -XX:ParallelGCThreads=1 -Xms2g -Xmx2g -XX:-TieredCompilation \
-    -XX:+HeapDumpOnOutOfMemoryError -Xbatch -Djava.library.path=./target/classes/perf: \
+    -XX:+HeapDumpOnOutOfMemoryError -Xbatch -Djava.library.path=./target/classes/perf:./target/classes/scheduler: \
     -classpath ${JARPATH} perf.SearchPerfTest \
     -dirImpl MMapDirectory \
     -indexPath ${INDEX_DIR} \

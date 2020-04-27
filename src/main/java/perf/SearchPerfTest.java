@@ -142,8 +142,6 @@ public class SearchPerfTest {
 
     OpenDirectory od = OpenDirectory.get(dirImpl);
 
-    Affinity.initPerf();
-
     /*
      * } else if (dirImpl.equals("NativePosixMMapDirectory")) { dir0 = new
      * NativePosixMMapDirectory(new File(dirPath)); ramDir = null; if (doFacets) {

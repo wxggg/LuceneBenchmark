@@ -23,10 +23,11 @@ import java.io.IOException;
 import java.util.HashMap;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.locks.Condition;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
+
+import scheduler.*;
 
 public class TaskThreads {
 
@@ -36,13 +37,20 @@ public class TaskThreads {
 	final AtomicBoolean stop;
 	final Scheduler scheduler;
 
-	public TaskThreads(TaskSource tasks, IndexState indexState, int numThreads) {
-		numThreads = 4;
-		scheduler = new Scheduler(numThreads);
-		threads = new TaskThread[numThreads];
-		stopLatch = new CountDownLatch(numThreads);
+	public TaskThreads(final TaskSource tasks, final IndexState indexState, int numThreads) {
+		LuceneSensor.init();
+		LinuxTools.init();
+		// numThreads = 4;
+		// numThreads = 2;
+		scheduler = new Scheduler();
+		int processors = scheduler.getHalfAvailableProcessors();
+		// int lanes = processors * 2;
+		int lanes = processors;
+		// lanes = 1; // test for lucene alone
+		threads = new TaskThread[lanes];
+		stopLatch = new CountDownLatch(lanes);
 		stop = new AtomicBoolean(false);
-		for (int cpuIdX = 0; cpuIdX < numThreads; cpuIdX++) {
+		for (int cpuIdX = 0; cpuIdX < lanes; cpuIdX++) {
 			threads[cpuIdX] = new TaskThread(startLatch, stopLatch, stop, tasks, indexState, cpuIdX, scheduler);
 			threads[cpuIdX].start();
 		}
@@ -58,7 +66,7 @@ public class TaskThreads {
 
 	public void stop() throws InterruptedException {
 		stop.getAndSet(true);
-		for (Thread t : threads) {
+		for (final Thread t : threads) {
 			t.join();
 		}
 	}
@@ -66,20 +74,21 @@ public class TaskThreads {
 	/**
 	 * Scheduler
 	 */
-	private static class Scheduler {
+
+	private static class SchedulerBackup {
 
 		private final Lock lock;
 		private final Condition condition;
 
 		private final int maxCpu;
-		private HashMap<Integer, Integer> cpuStatus;
+		private final HashMap<Integer, Integer> cpuStatus;
 
 		private final String batchCpusetCpus = "/sys/fs/cgroup/cpuset/test/cpuset.cpus";
 		private String currentCpus;
 
 		private int idleFactor;
 
-		public Scheduler(int maxCpu) {
+		public SchedulerBackup(final int maxCpu) {
 			this.lock = new ReentrantLock();
 			this.condition = lock.newCondition();
 			this.maxCpu = maxCpu;
@@ -94,17 +103,17 @@ public class TaskThreads {
 
 		}
 
-		private void setBatchCpuset(String cpus) {
+		private void setBatchCpuset(final String cpus) {
 			if (cpus == currentCpus) {
 				return;
 			}
 
 			try {
-				FileWriter writer = new FileWriter(this.batchCpusetCpus);
+				final FileWriter writer = new FileWriter(this.batchCpusetCpus);
 				writer.write(cpus);
 				writer.flush();
 				writer.close();
-			} catch (IOException e) {
+			} catch (final IOException e) {
 				// TODO Auto-generated catch block
 				e.printStackTrace();
 			}
@@ -120,10 +129,8 @@ public class TaskThreads {
 			setBatchCpuset(cpus);
 		}
 
-		void schedule(int cpuId, int queueSize) {
-
-			// System.out.println("schedule thread on cpu=" + cpuId + " with queueSize=" +
-			// queueSize);
+		void schedule(final int cpuId, final int queueSize) {
+			System.out.println("schedule thread on cpu=" + cpuId + " with queueSize=" + queueSize);
 			if (queueSize > 3) {
 				lock.lock();
 				condition.signalAll();
@@ -153,13 +160,13 @@ public class TaskThreads {
 			try {
 				lock.lock();
 				if (queueSize == 0) {
-					System.out.println("queueSize=" + queueSize + " Thread " + cpuId + " is	awaiting....");
+					System.out.println("queueSize=" + queueSize + " Thread " + cpuId + " is awaiting....");
 					condition.await();
 				}
 
 				System.out.println("queueSize=" + queueSize + " Thread " + cpuId + " is working....");
 
-			} catch (InterruptedException e1) {
+			} catch (final InterruptedException e1) {
 				// TODO Auto-generated catch block
 				e1.printStackTrace();
 			} finally {
@@ -179,8 +186,8 @@ public class TaskThreads {
 
 		private final Scheduler scheduler;
 
-		public TaskThread(CountDownLatch startLatch, CountDownLatch stopLatch, AtomicBoolean stop, TaskSource tasks,
-				IndexState indexState, int cpuId, Scheduler scheduler) {
+		public TaskThread(final CountDownLatch startLatch, final CountDownLatch stopLatch, final AtomicBoolean stop,
+				final TaskSource tasks, final IndexState indexState, final int cpuId, final Scheduler scheduler) {
 			this.startLatch = startLatch;
 			this.stopLatch = stopLatch;
 			this.stop = stop;
@@ -192,17 +199,17 @@ public class TaskThreads {
 
 		@Override
 		public void run() {
-			System.out.println("TaskThread " + cpuId + " set to CPU " + cpuId);
-			Affinity.setCPUAffinity(cpuId);
-			String[] eventNames = { "INSTRUCTION_RETIRED:u:k", "UNHALTED_CORE_CYCLES:u:k" };
-			Affinity.createEvents(eventNames);
+			// System.out.println("TaskThread " + cpuId + " set to CPU " + cpuId);
+			LinuxTools.setAffinity(cpuId);
+			final String[] events = { "INSTRUCTION_RETIRED:u:k", "UNHALTED_CORE_CYCLES:u:k" };
+			LinuxTools.createPerfEvents(events);
 
-			long[] eventBeginVals = new long[3];
-			long[] eventEndVals = new long[3];
+			final long[] eventBeginVals = new long[3];
+			final long[] eventEndVals = new long[3];
 
 			try {
 				startLatch.await();
-			} catch (InterruptedException ie) {
+			} catch (final InterruptedException ie) {
 				Thread.currentThread().interrupt();
 				return;
 			}
@@ -219,26 +226,28 @@ public class TaskThreads {
 					}
 					task.cpuId = cpuId;
 					task.processTimeNS = System.nanoTime();
-					Affinity.readEvents(eventBeginVals);
+					LinuxTools.readEvents(eventBeginVals);
 					try {
 						task.go(indexState);
-					} catch (IOException ioe) {
+					} catch (final IOException ioe) {
 						throw new RuntimeException(ioe);
 					}
 					task.finishTimeNS = System.nanoTime();
-					Affinity.readEvents(eventEndVals);
+					LinuxTools.readEvents(eventEndVals);
 
 					task.instructions = eventEndVals[0] - eventBeginVals[0];
 					task.cycles = eventEndVals[1] - eventBeginVals[1];
 
+					// Sensor.post(task.queSize, task.finishTimeNS - task.recvTimeNS);
+
 					try {
 						tasks.taskDone(task);
-					} catch (Exception e) {
+					} catch (final Exception e) {
 						System.out.println(Thread.currentThread().getName() + ": ignoring exc:");
 						e.printStackTrace();
 					}
 				}
-			} catch (Exception e) {
+			} catch (final Exception e) {
 				throw new RuntimeException(e);
 			} finally {
 				stopLatch.countDown();
